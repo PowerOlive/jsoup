@@ -490,8 +490,10 @@ public class HttpConnection implements Connection {
         private static boolean looksLikeUtf8(byte[] input) {
             int i = 0;
             // BOM:
-            if (input.length >= 3 && (input[0] & 0xFF) == 0xEF
-                && (input[1] & 0xFF) == 0xBB & (input[2] & 0xFF) == 0xBF) {
+            if (input.length >= 3
+                && (input[0] & 0xFF) == 0xEF
+                && (input[1] & 0xFF) == 0xBB
+                && (input[2] & 0xFF) == 0xBF) {
                 i = 3;
             }
 
@@ -855,8 +857,12 @@ public class HttpConnection implements Connection {
             Response res = null;
             try {
                 conn.connect();
-                if (conn.getDoOutput())
-                    writePost(req, conn.getOutputStream(), mimeBoundary);
+                if (conn.getDoOutput()) {
+                    OutputStream out = conn.getOutputStream();
+                    try { writePost(req, out, mimeBoundary); }
+                    catch (IOException e) { conn.disconnect(); throw e; }
+                    finally { out.close(); }
+                }
 
                 int status = conn.getResponseCode();
                 res = new Response(conn, req, previousResponse);

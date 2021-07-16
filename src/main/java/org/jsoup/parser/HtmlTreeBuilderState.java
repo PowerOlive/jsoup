@@ -123,7 +123,7 @@ enum HtmlTreeBuilderState {
                         if (name.equals("base") && el.hasAttr("href"))
                             tb.maybeSetBaseUri(el);
                     } else if (name.equals("meta")) {
-                        Element meta = tb.insertEmpty(start);
+                        tb.insertEmpty(start);
                         // todo: charset switches
                     } else if (name.equals("title")) {
                         handleRcData(start, tb);
@@ -842,7 +842,6 @@ enum HtmlTreeBuilderState {
                     tb.replaceOnStack(node, replacement);
                     node = replacement;
 
-                    //noinspection StatementWithEmptyBody
                     if (lastNode == furthestBlock) {
                         // move the aforementioned bookmark to be immediately after the new node in the list of active formatting elements.
                         // not getting how this bookmark both straddles the element above, but is inbetween here...
@@ -855,14 +854,16 @@ enum HtmlTreeBuilderState {
                     lastNode = node;
                 }
 
-                if (inSorted(commonAncestor.normalName(), Constants.InBodyEndTableFosters)) {
-                    if (lastNode.parent() != null)
-                        lastNode.remove();
-                    tb.insertInFosterParent(lastNode);
-                } else {
-                    if (lastNode.parent() != null)
-                        lastNode.remove();
-                    commonAncestor.appendChild(lastNode);
+                if (commonAncestor != null) { // safety check, but would be an error if null
+                    if (inSorted(commonAncestor.normalName(), Constants.InBodyEndTableFosters)) {
+                        if (lastNode.parent() != null)
+                            lastNode.remove();
+                        tb.insertInFosterParent(lastNode);
+                    } else {
+                        if (lastNode.parent() != null)
+                            lastNode.remove();
+                        commonAncestor.appendChild(lastNode);
+                    }
                 }
 
                 Element adopter = new Element(formatEl.tag(), tb.getBaseUri());
@@ -902,7 +903,7 @@ enum HtmlTreeBuilderState {
     },
     InTable {
         boolean process(Token t, HtmlTreeBuilder tb) {
-            if (t.isCharacter()) {
+            if (t.isCharacter() && inSorted(tb.currentElement().normalName(), InTableFoster)) {
                 tb.newPendingTableCharacters();
                 tb.markInsertionMode();
                 tb.transition(InTableText);
@@ -926,6 +927,7 @@ enum HtmlTreeBuilderState {
                     tb.insert(startTag);
                     tb.transition(InColumnGroup);
                 } else if (name.equals("col")) {
+                    tb.clearStackToTableContext();
                     tb.processStartTag("colgroup");
                     return tb.process(t);
                 } else if (inSorted(name, InTableToBody)) {
@@ -933,13 +935,23 @@ enum HtmlTreeBuilderState {
                     tb.insert(startTag);
                     tb.transition(InTableBody);
                 } else if (inSorted(name, InTableAddBody)) {
+                    tb.clearStackToTableContext();
                     tb.processStartTag("tbody");
                     return tb.process(t);
                 } else if (name.equals("table")) {
                     tb.error(this);
-                    boolean processed = tb.processEndTag("table");
-                    if (processed) // only ignored if in fragment
+                    if (!tb.inTableScope(name)) { // ignore it
+                        return false;
+                    } else {
+                        tb.popStackToClose(name);
+                        tb.resetInsertionMode();
+                        if (tb.state() == InTable) {
+                            // not per spec - but haven't transitioned out of table. so try something else
+                            tb.insert(startTag);
+                            return true;
+                        }
                         return tb.process(t);
+                    }
                 } else if (inSorted(name, InTableToHead)) {
                     return tb.process(t, InHead);
                 } else if (name.equals("input")) {
@@ -969,8 +981,8 @@ enum HtmlTreeBuilderState {
                         return false;
                     } else {
                         tb.popStackToClose("table");
+                        tb.resetInsertionMode();
                     }
-                    tb.resetInsertionMode();
                 } else if (inSorted(name, InTableEndErr)) {
                     tb.error(this);
                     return false;
@@ -988,15 +1000,10 @@ enum HtmlTreeBuilderState {
 
         boolean anythingElse(Token t, HtmlTreeBuilder tb) {
             tb.error(this);
-            boolean processed;
-            if (inSorted(tb.currentElement().normalName(), InTableFoster)) {
-                tb.setFosterInserts(true);
-                processed = tb.process(t, InBody);
-                tb.setFosterInserts(false);
-            } else {
-                processed = tb.process(t, InBody);
-            }
-            return processed;
+            tb.setFosterInserts(true);
+            tb.process(t, InBody);
+            tb.setFosterInserts(false);
+            return true;
         }
     },
     InTableText {
@@ -1528,8 +1535,11 @@ enum HtmlTreeBuilderState {
                 //  that space into body if other tags get re-added. but that's overkill for now
                 Element html = tb.popStackToClose("html");
                 tb.insert(t.asCharacter());
-                tb.stack.add(html);
-                tb.stack.add(html.selectFirst("body"));
+                if (html != null) {
+                    tb.stack.add(html);
+                    Element body = html.selectFirst("body");
+                    if (body != null) tb.stack.add(body);
+                }
             }else if (t.isEOF()) {
                 // nice work chuck
             } else {
